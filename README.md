@@ -5,8 +5,8 @@ _A homemade humble library to run automated python crypto trading bots_
 \
 🛠️ Setup commands (virtual environment included)
 -------------
-> git clone https://github.com/RobotTraders/LiveTradingBots.git \
-> bash LiveTradingBots/install.sh
+> git clone https://github.com/cryptoshrine/LiveTradingBots_Spot.git \
+> bash LiveTradingBots_Spot/install.sh
 
 
 \
