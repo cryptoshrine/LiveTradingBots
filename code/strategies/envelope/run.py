@@ -106,15 +106,15 @@ for i in range_longs:
     amount = balance / len(params['envelopes']) / data[f'band_low_{i + 1}'].iloc[-1]
     min_amount = bitget.fetch_min_amount_tradable(params['symbol'])
     if amount >= min_amount:
-        # entry (buy limit order at lower envelope band)
-        bitget.place_limit_order(
+        # entry (buy trigger market order at lower envelope band)
+        bitget.place_trigger_market_order(
             symbol=params['symbol'],
             side='buy',
             amount=amount,
-            price=data[f'band_low_{i + 1}'].iloc[-1],
+            trigger_price=(1 + trigger_price_delta) * data[f'band_low_{i + 1}'].iloc[-1],
             print_error=True,
         )
-        print(f"{datetime.now().strftime('%H:%M:%S')}: placed open long limit order of {amount}, price {data[f'band_low_{i + 1}'].iloc[-1]}")
+        print(f"{datetime.now().strftime('%H:%M:%S')}: placed open long trigger market order of {amount}, trigger price {1.005 * data[f'band_low_{i + 1}'].iloc[-1]}")
     else:
         print(f"{datetime.now().strftime('%H:%M:%S')}: /!\\ long orders not placed for envelope {i+1}, amount {amount} smaller than minimum requirement {min_amount}")
 
@@ -131,28 +131,27 @@ while True:
             take_profit_price = data['average'].iloc[-1]
 
             amount = position['amount']
-            # exit (take profit - sell limit order at the average price)
-            bitget.place_limit_order(
+            # exit (take profit - sell trigger market order at the average price)
+            bitget.place_trigger_market_order(
                 symbol=params['symbol'],
                 side=close_side,
                 amount=amount,
-                price=take_profit_price,
+                trigger_price=take_profit_price,
                 print_error=True,
             )
-            print(f"{datetime.now().strftime('%H:%M:%S')}: placed exit long limit order of {amount}, price {take_profit_price}")
+            print(f"{datetime.now().strftime('%H:%M:%S')}: placed exit long trigger market order of {amount}, trigger price {take_profit_price}")
             
-            # stop loss (stop-limit order)
-            sl_order = bitget.place_stop_limit_order(
+            # stop loss (trigger market order)
+            sl_order = bitget.place_trigger_market_order(
                 symbol=params['symbol'],
                 side=close_side,
                 amount=amount,
-                stop_price=stop_loss_price,
-                limit_price=stop_loss_price * (1 - 0.005),  # Small margin below stop price to ensure execution
+                trigger_price=stop_loss_price,
                 print_error=True,
             )
             tracker_info['stop_loss_ids'] = [sl_order['id']]
             update_tracker_file(tracker_file, tracker_info)
-            print(f"{datetime.now().strftime('%H:%M:%S')}: placed stop loss stop-limit order of {amount}, stop price {stop_loss_price}, limit price {stop_loss_price * (1 - 0.005)}")
+            print(f"{datetime.now().strftime('%H:%M:%S')}: placed stop loss trigger market order of {amount}, trigger price {stop_loss_price}")
         else:
             # Check for price jump condition
             current_price = bitget.fetch_ticker(params['symbol'])['last']
