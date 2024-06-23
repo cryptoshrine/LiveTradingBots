@@ -1,2 +1,2 @@
-source /home/ubuntu/LiveTradingBots_Spot/code/.venv/bin/activate
-python3 /home/ubuntu/LiveTradingBots_Spot/code/strategies/envelope/run.py
+source LiveTradingBots_Spot/code/.venv/bin/activate
+LiveTradingBots_Spot/code/strategies/envelope/run.py
