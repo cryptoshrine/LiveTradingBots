@@ -5,8 +5,8 @@ echo Installing pip
 sudo apt install python3-pip -y
 
 echo Installing virtual environment and packages
-cd LiveTradingBots_Spot/code
-sudo apt-get install python3-venv
+cd /home/ubuntu/LiveTradingBots_Spot/code
+sudo apt-get install python3-venv -y
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r ../requirements.txt
