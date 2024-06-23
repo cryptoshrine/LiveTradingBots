@@ -3,27 +3,28 @@ import sys
 import json
 import ta
 from datetime import datetime
+import time
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'utilities'))
 
-from utilities.bitget_spot import BitgetSpot  # Import BitgetSpot instead of BitgetFutures
+from bitget_spot import BitgetSpot  # Import BitgetSpot instead of BitgetFutures
 
 # --- CONFIG ---
 params = {
-    'symbol': '/USDT',  # Changed symbol format for spot trading
+    'symbol': 'BTC/USDT',  # Changed symbol format for spot trading
     'timeframe': '1h',
     'balance_fraction': 1,
     'average_type': 'DCM',  # 'SMA', 'EMA', 'WMA', 'DCM' 
     'average_period': 5,
     'envelopes': [0.07, 0.11, 0.14],
     'stop_loss_pct': 0.4,
-#    'price_jump_pct': 0.3,  # optional, remove if not wanted
+    'price_jump_pct': 0.3,  # Close position if price drops/rises by this percentage
 }
 
-key_path = 'LiveTradingBots/secret.json'
+key_path = os.path.join(os.path.dirname(__file__), '..', '..', 'secret.json')
 key_name = 'envelope'
 
-tracker_file = f"LiveTradingBots/code/strategies/envelope/tracker_{params['symbol'].replace('/', '-').replace(':', '-')}.json"
+tracker_file = os.path.join(os.path.dirname(__file__), f"tracker_{params['symbol'].replace('/', '-').replace(':', '-')}.json")
 
 trigger_price_delta = 0.005
 
@@ -81,13 +82,6 @@ if len(closed_orders) > 0 and closed_orders[-1]['id'] in tracker_info['stop_loss
     })
     print(f"{datetime.now().strftime('%H:%M:%S')}: /!\\ stop loss was triggered")
 
-# --- CHECK IF A POSITION IS OPEN ---
-open_orders = bitget.fetch_open_orders(params['symbol'])
-open_position = True if len(open_orders) > 0 else False
-if open_position:
-    position = open_orders[0]  # Assuming there's only one open order
-    print(f"{datetime.now().strftime('%H:%M:%S')}: {position['side']} position is open")
-
 # --- OK TO TRADE CHECK ---
 print(f"{datetime.now().strftime('%H:%M:%S')}: okay to trade check, status was {tracker_info['status']}")
 last_price = data['close'].iloc[-1]
@@ -101,72 +95,82 @@ if tracker_info['status'] != "ok_to_trade":
         print(f"{datetime.now().strftime('%H:%M:%S')}: <<< status is still {tracker_info['status']}")
         sys.exit()
 
-# --- PLACE ORDERS DEPENDING ON HOW MANY BANDS HAVE ALREADY BEEN HIT ---
-if open_position:
-    long_ok = True if 'buy' == position['side'] else False
-    range_longs = range(len(params['envelopes']) - len([o for o in open_orders if o['side'] == 'buy']), len(params['envelopes']))
+# --- PLACE ENTRY ORDERS ---
+balance = params['balance_fraction'] * bitget.fetch_balance()['USDT']['total']
+if 'buy' == tracker_info['last_side']:
+    range_longs = range(len(params['envelopes']) - len([o for o in orders if o['side'] == 'buy']), len(params['envelopes']))
 else:
-    long_ok = True
     range_longs = range(len(params['envelopes']))
 
-if long_ok:
-    for i in range_longs:
-        amount = balance / len(params['envelopes']) / data[f'band_low_{i + 1}'].iloc[-1]
-        min_amount = bitget.fetch_min_amount_tradable(params['symbol'])
-        if amount >= min_amount:
-            # entry (buy limit order at lower envelope band)
-            bitget.place_trigger_limit_order(
-                symbol=params['symbol'],
-                side='buy',
-                amount=amount,
-                trigger_price=(1 + trigger_price_delta) * data[f'band_low_{i + 1}'].iloc[-1],
-                price=data[f'band_low_{i + 1}'].iloc[-1],
-                print_error=True,
-            )
-            print(f"{datetime.now().strftime('%H:%M:%S')}: placed open long trigger limit order of {amount}, trigger price {1.005 * data[f'band_low_{i + 1}'].iloc[-1]}, price {data[f'band_low_{i + 1}'].iloc[-1]}")
-else:
-    print(f"{datetime.now().strftime('%H:%M:%S')}: /!\\ long orders not placed for envelope {i+1}, amount {amount} smaller than minimum requirement {min_amount}")
-
-# If a position is open, place TP and SL orders
-if open_position:
-    if position['side'] == 'buy':
-        close_side = 'sell'
-        stop_loss_price = float(position['price']) * (1 - params['stop_loss_pct'])
-        take_profit_price = data['average'].iloc[-1]
-
-        amount = position['amount']
-        # exit (take profit - sell limit order at the average price)
+for i in range_longs:
+    amount = balance / len(params['envelopes']) / data[f'band_low_{i + 1}'].iloc[-1]
+    min_amount = bitget.fetch_min_amount_tradable(params['symbol'])
+    if amount >= min_amount:
+        # entry (buy limit order at lower envelope band)
         bitget.place_limit_order(
             symbol=params['symbol'],
-            side=close_side,
+            side='buy',
             amount=amount,
-            price=take_profit_price,
+            price=data[f'band_low_{i + 1}'].iloc[-1],
             print_error=True,
         )
-        print(f"{datetime.now().strftime('%H:%M:%S')}: placed exit long limit order of {amount}, price {take_profit_price}")
-        
-        # stop loss (stop-limit order)
-        sl_order = bitget.place_stop_limit_order(
-            symbol=params['symbol'],
-            side=close_side,
-            amount=amount,
-            stop_price=stop_loss_price,
-            limit_price=stop_loss_price * (1 - 0.005),  # Small margin below stop price to ensure execution
-            print_error=True,
-        )
-        info = {
-            "status": "ok_to_trade",
-            "last_side": position['side'],
-            "stop_loss_price": stop_loss_price,
-            "stop_loss_ids": [sl_order['id']],
-        }
-        print(f"{datetime.now().strftime('%H:%M:%S')}: placed stop loss stop-limit order of {amount}, stop price {stop_loss_price}, limit price {stop_loss_price * (1 - 0.005)}")
-else:
-    info = {
-        "status": "ok_to_trade",
-        "last_side": tracker_info['last_side'],
-        "stop_loss_ids": [],
-    }
+        print(f"{datetime.now().strftime('%H:%M:%S')}: placed open long limit order of {amount}, price {data[f'band_low_{i + 1}'].iloc[-1]}")
+    else:
+        print(f"{datetime.now().strftime('%H:%M:%S')}: /!\\ long orders not placed for envelope {i+1}, amount {amount} smaller than minimum requirement {min_amount}")
 
-update_tracker_file(tracker_file, info)
-print(f"{datetime.now().strftime('%H:%M:%S')}: <<< all done")
+# --- MONITOR FOR OPEN POSITIONS AND PLACE TP/SL ORDERS ---
+while True:
+    time.sleep(60)  # Check every 60 seconds
+    open_orders = bitget.fetch_open_orders(params['symbol'])
+    positions = bitget.fetch_open_orders(params['symbol'])  # Re-fetch open orders to check if any have been filled
+    if positions:
+        position = positions[0]  # Assuming only one position at a time
+        if 'buy' == position['side']:
+            close_side = 'sell'
+            stop_loss_price = float(position['price']) * (1 - params['stop_loss_pct'])
+            take_profit_price = data['average'].iloc[-1]
+
+            amount = position['amount']
+            # exit (take profit - sell limit order at the average price)
+            bitget.place_limit_order(
+                symbol=params['symbol'],
+                side=close_side,
+                amount=amount,
+                price=take_profit_price,
+                print_error=True,
+            )
+            print(f"{datetime.now().strftime('%H:%M:%S')}: placed exit long limit order of {amount}, price {take_profit_price}")
+            
+            # stop loss (stop-limit order)
+            sl_order = bitget.place_stop_limit_order(
+                symbol=params['symbol'],
+                side=close_side,
+                amount=amount,
+                stop_price=stop_loss_price,
+                limit_price=stop_loss_price * (1 - 0.005),  # Small margin below stop price to ensure execution
+                print_error=True,
+            )
+            tracker_info['stop_loss_ids'] = [sl_order['id']]
+            update_tracker_file(tracker_file, tracker_info)
+            print(f"{datetime.now().strftime('%H:%M:%S')}: placed stop loss stop-limit order of {amount}, stop price {stop_loss_price}, limit price {stop_loss_price * (1 - 0.005)}")
+        else:
+            # Check for price jump condition
+            current_price = bitget.fetch_ticker(params['symbol'])['last']
+            entry_price = float(position['price'])
+            if current_price <= entry_price * (1 - params['price_jump_pct']):
+                # Price dropped significantly, close the position
+                bitget.place_market_order(
+                    symbol=params['symbol'],
+                    side='sell',
+                    amount=position['amount'],
+                    print_error=True,
+                )
+                update_tracker_file(tracker_file, {
+                    "status": "ok_to_trade",
+                    "last_side": "sell",
+                    "stop_loss_ids": [],
+                })
+                print(f"{datetime.now().strftime('%H:%M:%S')}: /!\\ price drop detected, closed long position at {current_price}")
+            break
+    else:
+        print(f"{datetime.now().strftime('%H:%M:%S')}: No position open yet. Continuing to monitor...")
