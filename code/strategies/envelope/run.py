@@ -10,7 +10,7 @@ from utilities.bitget_spot import BitgetSpot  # Import BitgetSpot instead of Bit
 
 # --- CONFIG ---
 params = {
-    'symbol': 'BTC/USDT',  # Changed symbol format for spot trading
+    'symbol': '/USDT',  # Changed symbol format for spot trading
     'timeframe': '1h',
     'balance_fraction': 1,
     'average_type': 'DCM',  # 'SMA', 'EMA', 'WMA', 'DCM' 
