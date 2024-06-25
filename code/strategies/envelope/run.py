@@ -6,7 +6,6 @@ from datetime import datetime
 import time
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'utilities'))
-
 from bitget_spot import BitgetSpot  # Import BitgetSpot instead of BitgetFutures
 
 # --- CONFIG ---
@@ -16,7 +15,6 @@ params = {
     'balance_fraction': 1,
     'average_type': 'DCM',  # 'SMA', 'EMA', 'WMA', 'DCM' 
     'average_period': 5,
-    'envelopes': [0.07, 0.11, 0.14],
     'stop_loss_pct': 0.4,
     'price_jump_pct': 0.3,  # Close position if price drops/rises by this percentage
 }
@@ -55,21 +53,27 @@ print(f"{datetime.now().strftime('%H:%M:%S')}: open orders cancelled")
 
 # --- FETCH OHLCV DATA, CALCULATE INDICATORS ---
 data = bitget.fetch_recent_ohlcv(params['symbol'], params['timeframe'], 100).iloc[:-1]
-if 'DCM' == params['average_type']:
-    ta_obj = ta.volatility.DonchianChannel(data['high'], data['low'], data['close'], window=params['average_period'])
-    data['average'] = ta_obj.donchian_channel_mband()
-elif 'SMA' == params['average_type']:
-    data['average'] = ta.trend.sma_indicator(data['close'], window=params['average_period'])
-elif 'EMA' == params['average_type']:
-    data['average'] = ta.trend.ema_indicator(data['close'], window=params['average_period'])  
-elif 'WMA' == params['average_type']:
-    data['average'] = ta.trend.wma_indicator(data['close'], window=params['average_period'])   
-else:
-    raise ValueError(f"The average type {params['average_type']} is not supported")
 
-for i, e in enumerate(params['envelopes']):
-    data[f'band_low_{i + 1}'] = data['average'] * (1 - e)
-print(f"{datetime.now().strftime('%H:%M:%S')}: ohlcv data fetched")
+# Calculate ATR for volatility measure
+atr_period = params['average_period']
+data['ATR'] = average_true_range(data['high'], data['low'], data['close'], window=atr_period)
+
+# Define a base envelope percentage
+base_envelope_pct = 0.05  # 5% as a base
+
+# Define minimum and maximum number of envelopes
+min_envelopes = 3
+max_envelopes = 10
+
+# Determine number of envelope bands based on volatility
+volatility_factor = data['ATR'].iloc[-1] / data['close'].mean()  # Relative volatility
+num_envelopes = max(min_envelopes, min(int(volatility_factor * max_envelopes), max_envelopes))
+
+# Calculate dynamic envelopes
+for i in range(num_envelopes):
+    data[f'band_low_{i + 1}'] = data['average'] * (1 - (base_envelope_pct * (i + 1) * data['ATR'].iloc[-1]))
+
+print(f"{datetime.now().strftime('%H:%M:%S')}: OHLCV data and ATR fetched, dynamic envelopes calculated")
 
 # --- CHECKS IF STOP LOSS WAS TRIGGERED ---
 tracker_info = read_tracker_file(tracker_file)
@@ -98,15 +102,14 @@ if tracker_info['status'] != "ok_to_trade":
 # --- PLACE ENTRY ORDERS ---
 balance = params['balance_fraction'] * bitget.fetch_balance()['USDT']['total']
 if 'buy' == tracker_info['last_side']:
-    range_longs = range(len(params['envelopes']) - len([o for o in orders if o['side'] == 'buy']), len(params['envelopes']))
+    range_longs = range(num_envelopes - len([o for o in orders if o['side'] == 'buy']), num_envelopes)
 else:
-    range_longs = range(len(params['envelopes']))
+    range_longs = range(num_envelopes)
 
 for i in range_longs:
-    amount = balance / len(params['envelopes']) / data[f'band_low_{i + 1}'].iloc[-1]
+    amount = balance / num_envelopes / data[f'band_low_{i + 1}'].iloc[-1]
     min_amount = bitget.fetch_min_amount_tradable(params['symbol'])
     if amount >= min_amount:
-        # entry (buy trigger market order at lower envelope band)
         bitget.place_trigger_market_order(
             symbol=params['symbol'],
             side='buy',
@@ -131,7 +134,6 @@ while True:
             take_profit_price = data['average'].iloc[-1]
 
             amount = position['amount']
-            # exit (take profit - sell trigger market order at the average price)
             bitget.place_trigger_market_order(
                 symbol=params['symbol'],
                 side=close_side,
@@ -141,7 +143,6 @@ while True:
             )
             print(f"{datetime.now().strftime('%H:%M:%S')}: placed exit long trigger market order of {amount}, trigger price {take_profit_price}")
             
-            # stop loss (trigger market order)
             sl_order = bitget.place_trigger_market_order(
                 symbol=params['symbol'],
                 side=close_side,
@@ -153,11 +154,9 @@ while True:
             update_tracker_file(tracker_file, tracker_info)
             print(f"{datetime.now().strftime('%H:%M:%S')}: placed stop loss trigger market order of {amount}, trigger price {stop_loss_price}")
         else:
-            # Check for price jump condition
             current_price = bitget.fetch_ticker(params['symbol'])['last']
             entry_price = float(position['price'])
             if current_price <= entry_price * (1 - params['price_jump_pct']):
-                # Price dropped significantly, close the position
                 bitget.place_market_order(
                     symbol=params['symbol'],
                     side='sell',
